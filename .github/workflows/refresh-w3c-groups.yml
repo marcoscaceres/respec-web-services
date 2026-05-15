@@ -1,0 +1,44 @@
+# NOTE: Schedule trigger only fires on speced/respec-web-services (default branch).
+# On forks (e.g. marcoscaceres/respec-web-services) use workflow_dispatch instead.
+name: Refresh W3C groups
+
+on:
+  schedule:
+    # Daily at 05:27 UTC. Off-the-hour to avoid GitHub Actions queue spikes.
+    - cron: "27 5 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: refresh-w3c-groups
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger W3C groups refresh on respec.org
+        env:
+          SECRET: ${{ secrets.W3C_GROUPS_SECRET }}
+        # HMAC byte-exactness is load-bearing: the bytes hashed by openssl MUST
+        # match the bytes sent by curl. Keep `printf '%s'` (no trailing newline)
+        # and `--data "$body"` symmetric. Switching either to `echo` or to
+        # `--data-binary @file` with newline drift will silently break auth.
+        # HTTP 200 only confirms the job was queued; the worker swallows
+        # scraper errors. Server logs are the source of truth for success.
+        shell: bash -euo pipefail {0}
+        run: |
+          if [[ -z "$SECRET" ]]; then
+            echo "::error::W3C_GROUPS_SECRET is not set in repository secrets"
+            exit 1
+          fi
+          body='{}'
+          sig=$(printf '%s' "$body" | openssl dgst -sha1 -hmac "$SECRET" | awk '{print $NF}')
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-delay 30 --retry-all-errors \
+            --request POST https://respec.org/w3c/update \
+            --header 'Content-Type: application/json' \
+            --header "X-Hub-Signature: sha1=$sig" \
+            --data "$body"
