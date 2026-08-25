@@ -97,7 +97,9 @@ export function searchOne(
   const options = { ...defaultOptions, ...opts };
   normalizeQuery(query, options);
 
-  const filtered = cache.getOr(query.id, () => filter(query, store, options));
+  const filtered = cache.getOr(cacheKey(query, options), () =>
+    filter(query, store, options),
+  );
 
   let prefereredData = filterBySpecType(filtered, options.spec_type);
   prefereredData = filterPreferLatestVersion(prefereredData);
@@ -108,6 +110,28 @@ export function searchOne(
   }
   const result = prefereredData.map(item => pickFields(item, options.fields));
   return result;
+}
+
+/**
+ * Cache key for one `filter()` call. Two rules, both load-bearing:
+ *
+ * 1. It must NOT include `query.id`. That is caller-supplied on the POST routes, and
+ *    using it as the key let a caller seed the entry an honest client reads — the id
+ *    assigned to an id-less query is a deterministic hash of the query, so it is
+ *    predictable. Keying on the query alone also means two callers asking the same
+ *    thing under different ids share one entry instead of forcing a miss each time.
+ * 2. It must include everything `filter()` reads, which is these query fields *and*
+ *    `options.all` (via `filterByForContext`). Only its truthiness is read, hence `!!`.
+ *
+ * The field list is spelled out rather than spread so that unknown caller-sent fields
+ * cannot enlarge the key space. The trade-off: a new `Query` or `Options` field that
+ * affects `filter()` must be added here too, or it will serve stale results.
+ */
+function cacheKey(
+  { term, types, specs, for: forContext }: Query,
+  { all }: Options,
+) {
+  return objectHash({ term, types, specs, for: forContext, all: !!all });
 }
 
 function normalizeQuery(query: Query, options: Options) {

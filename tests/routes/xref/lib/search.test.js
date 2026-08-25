@@ -35,6 +35,73 @@ const search = (query, options) => {
 describe("xref - search", () => {
   beforeEach(() => cache.clear());
 
+  // Regression: `query.id` was used directly as the key of the process-wide, 3-day
+  // MemCache, and the id a client omits is a deterministic hash of the query — so a
+  // caller could compute an honest client's key and seed it with another term's
+  // results. The key must cover everything filter() reads, and nothing a caller sends.
+  describe("cache key", () => {
+    const uris = query => search(query).map(entry => entry.uri);
+    const script = [
+      "interact.html#elementdef-script",
+      "scripting.html#script",
+      "webappapis.html#concept-script",
+      "script.html#ScriptElement",
+    ];
+
+    it("does not let a caller-supplied id poison another query", () => {
+      // The id an honest `{ term: "script" }` request gets assigned.
+      const honestKey = _search([{ term: "script" }], store, { query: true })
+        .query[0].id;
+      cache.clear();
+
+      uris({ term: "body", id: honestKey }); // attacker seeds that key
+      expect(uris({ term: "script" })).toEqual(script);
+    });
+
+    it("keys on the query, so two terms sharing an id stay distinct", () => {
+      expect(uris({ term: "body", id: "same" })).not.toEqual(
+        uris({ term: "script", id: "same" }),
+      );
+    });
+
+    // Without this, keying on a caller-supplied (or id-inclusive) hash silently
+    // defeats the cache: every distinct id is a miss, and each miss adds an entry to
+    // an unbounded Map with a 3-day TTL.
+    it("reuses one entry for the same query under different ids", () => {
+      spyOn(cache, "set").and.callThrough();
+      uris({ term: "baseline", id: "req-1" });
+      uris({ term: "baseline", id: "req-2" });
+      expect(cache.set).toHaveBeenCalledTimes(1);
+    });
+
+    // Every query field filter() reads has to be in the key, or a query that differs
+    // only by that field reads the other one's entry.
+    it("separates entries that differ only by types, specs or for", () => {
+      const pairs = [
+        ["types", { term: "script", types: ["dfn"] }, { term: "script", types: ["element"] }],
+        ["specs", { term: "body", specs: [["fetch"]] }, { term: "body", specs: [["html"]] }],
+        ["for", { term: "event", for: "Window" }, { term: "event", for: "HTMLScriptElement" }],
+      ];
+      for (const [field, seed, query] of pairs) {
+        cache.clear();
+        const alone = uris(query);
+        cache.clear();
+        uris(seed);
+        expect(uris(query)).withContext(field).toEqual(alone);
+      }
+    });
+
+    // `options.all` changes what filter() returns (via filterByForContext), and the
+    // GET and POST routes pass different values, so it has to be part of the key.
+    it("separates entries that differ only by options.all", () => {
+      const scoped = { term: "script" };
+      const restrictive = search(scoped, { all: false }).length;
+      cache.clear();
+      search(scoped, { all: true });
+      expect(search(scoped, { all: false }).length).toBe(restrictive);
+    });
+  });
+
   describe("options", () => {
     describe("query", () => {
       it("adds query back to response if requested", () => {
