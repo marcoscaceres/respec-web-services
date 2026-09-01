@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import path from "path";
 
 import { PROJECT_ROOT } from "../../utils/constants.js";
+import { store as bibrefs } from "../bibrefs/lib/store-init.js";
 
 let version = "unknown";
 try {
@@ -17,7 +18,7 @@ try {
 }
 
 export default function route(_req: Request, res: Response) {
-  const { heapUsed, heapTotal } = process.memoryUsage();
+  const { heapUsed, heapTotal, rss } = process.memoryUsage();
   res.set("Cache-Control", "no-store");
   res.json({
     name: "respec.org",
@@ -25,5 +26,12 @@ export default function route(_req: Request, res: Response) {
     uptime: process.uptime(),
     heapUsed,
     heapTotal,
+    // pm2 restarts on rss, not heap.
+    rss,
+    bibrefs: {
+      updatedAt: bibrefs.dataWrittenAt?.toISOString() ?? null,
+      entries: bibrefs.entries,
+      degraded: bibrefs.degraded,
+    },
   });
 }
